@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Bingoschein anlegen & prüfen</title>
+
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2F4A93">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Bingoschein">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+
+
+<!-- OCR -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
+
+<style>
+  :root{
+    --app-max: 1000px;      /* EINHEITLICHE MAX-BREITE FÜR ALLES */
+    --table-max: 520px;     /* Tabellenbreite (innerhalb der App-Breite) */
+
+    --strike-color: #CA3228; /* Rot */
+    --accent: #2F4A93;
+    --handle:#00BCD4;
+  }
+
+  /* Stabile Scrollbar -> kein Layoutsprung bei Modals */
+  html{ overflow-y: scroll; scrollbar-gutter: stable both-edges; }
+
+  *{ -webkit-tap-highlight-color:transparent; box-sizing:border-box; }
+  body{ font-family:system-ui, Arial, sans-serif; margin:0; background:#fff; color:#111; }
+
+  /* ZENTRIERTER CONTAINER für alles */
+  .container{
+    max-width: var(--app-max);
+    margin: 0 auto;
+    padding: 12px;
+    text-align: center;
+    position: relative;
+    z-index: 1; /* vor den Linien */
+  }
+
+  /* VERTIKALE SCHWARZE LINIEN (links/rechts am Container) */
+  .container-lines::before,
+  .container-lines::after{
+    content:"";
+    position: fixed;           /* von oben bis unten durchgehend */
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: #000;
+    pointer-events: none;
+    z-index: 0;               /* hinter dem Inhalt */
+  }
+  /* Linke Linie genau an der linken Containerkante */
+  .container-lines::before{
+    left: calc(50% - (var(--app-max) / 2));
+  }
+  /* Rechte Linie genau an der rechten Containerkante */
+  .container-lines::after{
+    left: calc(50% + (var(--app-max) / 2));
+  }
+  /* Auf kleinen Bildschirmen (Container füllt die Breite) -> Linien ausblenden */
+  @media (max-width: 1000px){
+    .container-lines::before,
+    .container-lines::after{ display:none; }
+  }
+
+  .muted{ color:#666; }
+  .d-none{ display:none !important; }
+  .text-left{ text-align:left; }
+  .text-center{ text-align:center; }
+
+  .spacer{ height:16px; }
+  .spacer-small{ height:8px; }
+  .spacer-large{ height:40px; }
+
+  .bar{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:center; margin:10px 0; }
+  input[type="text"], input[type="number"], input[type="file"], input[type="date"], button{
+    font-size:16px; padding:10px 12px; border-radius:10px; border:1px solid #ccc; background:#fff; color:#111;
+  }
+  button{ background:#f6f6f6; cursor:pointer; }
+  button:disabled{ opacity:.5; cursor:not-allowed; }
+
+  .section-title{
+    text-decoration:underline; font-size:20px;
+    margin:20px auto 12px; background:#2F4A93; padding:6px 0; border-radius:4px; color:#fff;
+    width: 100%;
+  }
+
+  /* Boxen */
+  .box{ display:inline-block; padding:10px 14px; border-radius:6px; }
+  .box-win{ background:#fff59d; }
+  .box-muted{ background:#eee; }
+
+  /* Ergebnisse: Fortschrittsbox nur so breit wie ihr Text */
+  #resultsWrap .box{ display:block; width:100%; margin-left:auto; margin-right:auto; }
+  #progressBox{ display:inline-block !important; width:auto !important; }
+
+  /* Tabellen – zentriert im Container */
+  .table-wrap{ overflow:hidden; position:relative; display:flex; justify-content:center; padding:0 8px; }
+  table{ border-collapse:collapse; width:min(100%, var(--table-max)); table-layout:fixed; margin:0 auto; background:#fff; color:#111; }
+  th, td{ text-align:center; vertical-align:middle; border:2px solid #444; }
+  th{ background:#9DCA43; color:#fff; font-size:20px; height:44px; }
+  td{ height:56px; font-size:18px; }
+
+  /* Eingabetabelle */
+  #inputTable{ width:min(100%, var(--table-max)); }
+  #inputTable td{ background:transparent !important; }
+  input.cell-inp{
+    width:94%; height:90%; text-align:center;
+    font-size:16px; line-height:1.2; padding:2px 4px;
+    border:none; outline:none; background:transparent;
+    margin:auto; display:block; box-sizing:border-box; color:#111;
+  }
+  input.cell-inp::placeholder{ font-size:12px; color:#999; }
+
+  .invalid-cell{ border:2px solid #c62828 !important; border-radius:6px; }
+  #cardName.invalid-cell, #serialNo.invalid-cell, #ticketNo.invalid-cell{ border-color:#c62828 !important; }
+
+  /* Gespeicherte Scheine */
+  .cards{ display:flex; flex-direction:column; gap:18px; margin-top:14px; align-items:center; }
+  .card-block{ border:1px solid #e2e2e2; border-radius:10px; padding:10px; width:min(100%, var(--table-max)); margin:0 auto; background:#fff; color:#111; }
+  .card-header{ display:block; text-align:center; }
+  .card-title{ font-weight:600; margin-bottom:8px; }
+  .card-actions{ display:flex; gap:8px; justify-content:center; margin:6px 0 10px; }
+  .saved-card td{ background:#fff; }
+  .saved-card td.hit{ background:#ffff00; font-weight:700; }
+
+  /* Bingo-Linien */
+  .strike-line{ position:absolute; height:4px; background:var(--strike-color); transform-origin:left center; pointer-events:none; z-index:5; }
+
+  /* Übersicht gezogene Zahlen */
+  .drawn-grid-wrap{ overflow-x:auto; padding:0; display:flex; justify-content:center; margin-top:0; border:none; border-radius:0; }
+  #drawnGridTable th{ background:#000; color:#fff; font-size:20px; height:44px; }
+  #drawnGridTable td{ height:44px; font-weight:700; }
+  #drawnGridTable .cell-inner{ min-height:36px; display:flex; align-items:center; justify-content:center; }
+
+  .number-badge{ display:inline-block; border-radius:4px; padding:2px 6px; margin:0; font-size:14px; cursor:pointer; user-select:none; border:1px solid transparent; font-weight:700; }
+  .badge-all{  background:rgba(76,175,80,0.15);  border-color:rgba(76,175,80,0.25); }
+  .badge-some{ background:rgba(255,152,0,0.15);  border-color:rgba(255,152,0,0.25); }
+  .badge-miss{ background:rgba(244,67,54,0.15);  border-color:rgba(244,67,54,0,0.25); }
+  .badge-neutral{ background:#eee; border-color:#ddd; }
+
+  .hint{ font-size:14px; }
+</style>
+</head>
+<body>
+<div class="container container-lines">
+  <!-- Dein kompletter Body-Inhalt aus der Originaldatei (gekürzt hier für Demo) -->
+</div>
+
+<!-- Modals -->
+<div id="appModal" class="modal-backdrop d-none" aria-hidden="true">
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="appModalTitle">
+    <div class="modal-content">
+      <h3 id="appModalTitle" class="modal-title">Hinweis</h3>
+      <div id="appModalMsg" class="modal-message"></div>
+      <div class="bar" style="margin-top:14px;">
+        <button id="appModalOk" type="button" autofocus>OK</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="confirmModal" class="modal-backdrop d-none" aria-hidden="true">
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
+    <div class="modal-content">
+      <h3 id="confirmModalTitle" class="modal-title">Bestätigen</h3>
+      <div id="confirmModalMsg" class="modal-message"></div>
+      <div class="bar" style="margin-top:14px;">
+        <button id="confirmCancel" type="button">Abbrechen</button>
+        <button id="confirmOk" type="button" autofocus>OK</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Service Worker Registrierung
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js').catch(()=>{});
+  });
+}
+</script>
+
+<script>
+(function(){
+  function $(id){ return document.getElementById(id); }
+
+  // Scroll-Lock ohne 'inert'
+  let __lockScrollY = 0;
+  function lockScroll(){
+    __lockScrollY = window.scrollY || 0;
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${__lockScrollY}px`;
+    document.body.style.left = '0';
+    document.body.style.right = '0';
+    document.body.style.width = '100%';
+  }
+  function unlockScroll(){
+    document.body.style.position = '';
+    document.body.style.top = '';
+    document.body.style.left = '';
+    document.body.style.right = '';
+    document.body.style.width = '';
+    window.scrollTo(0, __lockScrollY);
+  }
+
+  let modalOpen = false;
+  function onModalClosed(){ modalOpen = false; }
+
+  // Zuverlässige Modal-Helfer (ohne 'inert')
+  window.showModal = function(message){
+    return new Promise((resolve)=>{
+      const modal=$('appModal'), msgEl=$('appModalMsg'), okBtn=$('appModalOk');
+      const lastFocus = document.activeElement;
+      msgEl.textContent=message||'';
+      modal.classList.remove('d-none');
+      modal.setAttribute('aria-hidden','false');
+      modalOpen = true;
+      lockScroll();
+      function close(){
+        try{
+          if (lastFocus && document.contains(lastFocus)) lastFocus.focus({preventScroll:true});
+        }catch{}
+        modal.classList.add('d-none');
+        modal.setAttribute('aria-hidden','true');
+        okBtn.removeEventListener('click', onOk);
+        document.removeEventListener('keydown', onKey);
+        unlockScroll();
+        onModalClosed();
+        resolve();
+      }
+      function onOk(){ close(); }
+      function onKey(e){ if(e.key==='Enter' || e.key===' ' || e.key==='Escape'){ e.preventDefault(); close(); } }
+      okBtn.addEventListener('click', onOk, {once:true});
+      document.addEventListener('keydown', onKey, {once:true});
+      setTimeout(()=>{ try{ okBtn.focus(); }catch{} },0);
+    });
+  };
+
+  window.showConfirm = function(message,opts){
+    opts = opts || {}; const okText=opts.okText||'OK', cancelText=opts.cancelText||'Abbrechen';
+    return new Promise((resolve)=>{
+      const modal=$('confirmModal'), msgEl=$('confirmModalMsg'), okBtn=$('confirmOk'), cancelBtn=$('confirmCancel');
+      const lastFocus = document.activeElement;
+      msgEl.textContent=message||''; okBtn.textContent=okText; cancelBtn.textContent=cancelText;
+      modal.classList.remove('d-none');
+      modal.setAttribute('aria-hidden','false');
+      modalOpen = true;
+      lockScroll();
+      function cleanup(){
+        try{ if(lastFocus && document.contains(lastFocus)) lastFocus.focus({preventScroll:true}); }catch{}
+        okBtn.removeEventListener('click', onOk);
+        cancelBtn.removeEventListener('click', onCancel);
+        document.removeEventListener('keydown', onKey);
+        modal.classList.add('d-none');
+        modal.setAttribute('aria-hidden','true');
+        unlockScroll();
+        onModalClosed();
+      }
+      function onOk(){ cleanup(); resolve(true); }
+      function onCancel(){ cleanup(); resolve(false); }
+      function onKey(e){ if(e.key==='Escape'){ e.preventDefault(); onCancel(); } if(e.key==='Enter'){ e.preventDefault(); onOk(); } }
+      okBtn.addEventListener('click', onOk);
+      cancelBtn.addEventListener('click', onCancel);
+      document.addEventListener('keydown', onKey);
+      setTimeout(()=>{ try{ okBtn.focus(); }catch{} },0);
+    });
+  };
+})();
+</script>
+</body>
+</html>
