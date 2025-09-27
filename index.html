@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Bingoschein anlegen & prüfen</title>
+
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2F4A93">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Bingo">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+
+
+<!-- OCR -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
+
+<style>
+  :root{
+    --app-max: 1000px;      /* EINHEITLICHE MAX-BREITE FÜR ALLES */
+    --table-max: 520px;     /* Tabellenbreite (innerhalb der App-Breite) */
+
+    --strike-color: #CA3228; /* Rot */
+    --accent: #2F4A93;
+    --handle:#00BCD4;
+  }
+
+  /* Stabile Scrollbar -> kein Layoutsprung bei Modals */
+  html{ overflow-y: scroll; scrollbar-gutter: stable both-edges; }
+
+  *{ -webkit-tap-highlight-color:transparent; box-sizing:border-box; }
+  body{ font-family:system-ui, Arial, sans-serif; margin:0; background:#fff; color:#111; }
+
+  /* ZENTRIERTER CONTAINER für alles */
+  .container{
+    max-width: var(--app-max);
+    margin: 0 auto;
+    padding: 12px;
+    text-align: center;
+    position: relative;
+    z-index: 1; /* vor den Linien */
+  }
+
+  /* VERTIKALE SCHWARZE LINIEN (links/rechts am Container) */
+  .container-lines::before,
+  .container-lines::after{
+    content:"";
+    position: fixed;           /* von oben bis unten durchgehend */
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: #000;
+    pointer-events: none;
+    z-index: 0;               /* hinter dem Inhalt */
+  }
+  /* Linke Linie genau an der linken Containerkante */
+  .container-lines::before{
+    left: calc(50% - (var(--app-max) / 2));
+  }
+  /* Rechte Linie genau an der rechten Containerkante */
+  .container-lines::after{
+    left: calc(50% + (var(--app-max) / 2));
+  }
+  /* Auf kleinen Bildschirmen (Container füllt die Breite) -> Linien ausblenden */
+  @media (max-width: 1000px){
+    .container-lines::before,
+    .container-lines::after{ display:none; }
+  }
+
+  .muted{ color:#666; }
+  .d-none{ display:none !important; }
+  .text-left{ text-align:left; }
+  .text-center{ text-align:center; }
+
+  .spacer{ height:16px; }
+  .spacer-small{ height:8px; }
+  .spacer-large{ height:40px; }
+
+  .bar{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:center; margin:10px 0; }
+  input[type="text"], input[type="number"], input[type="file"], input[type="date"], button{
+    font-size:16px; padding:10px 12px; border-radius:10px; border:1px solid #ccc; background:#fff; color:#111;
+  }
+  button{ background:#f6f6f6; cursor:pointer; }
+  button:disabled{ opacity:.5; cursor:not-allowed; }
+
+  .section-title{
+    text-decoration:underline; font-size:20px;
+    margin:20px auto 12px; background:#2F4A93; padding:6px 0; border-radius:4px; color:#fff;
+    width: 100%;
+  }
+
+  /* Boxen */
+  .box{ display:inline-block; padding:10px 14px; border-radius:6px; }
+  .box-win{ background:#fff59d; }
+  .box-muted{ background:#eee; }
+
+  /* Ergebnisse: Fortschrittsbox nur so breit wie ihr Text */
+  #resultsWrap .box{ display:block; width:100%; margin-left:auto; margin-right:auto; }
+  #progressBox{ display:inline-block !important; width:auto !important; }
+
+  /* Tabellen – zentriert im Container */
+  .table-wrap{ overflow:hidden; position:relative; display:flex; justify-content:center; padding:0 8px; }
+  table{ border-collapse:collapse; width:min(100%, var(--table-max)); table-layout:fixed; margin:0 auto; background:#fff; color:#111; }
+  th, td{ text-align:center; vertical-align:middle; border:2px solid #444; }
+  th{ background:#9DCA43; color:#fff; font-size:20px; height:44px; }
+  td{ height:56px; font-size:18px; }
+
+  /* Eingabetabelle */
+  #inputTable{ width:min(100%, var(--table-max)); }
+  #inputTable td{ background:transparent !important; }
+  input.cell-inp{
+    width:94%; height:90%; text-align:center;
+    font-size:16px; line-height:1.2; padding:2px 4px;
+    border:none; outline:none; background:transparent;
+    margin:auto; display:block; box-sizing:border-box; color:#111;
+  }
+  input.cell-inp::placeholder{ font-size:12px; color:#999; }
+
+  .invalid-cell{ border:2px solid #c62828 !important; border-radius:6px; }
+  #cardName.invalid-cell, #serialNo.invalid-cell, #ticketNo.invalid-cell{ border-color:#c62828 !important; }
+
+  /* Gespeicherte Scheine */
+  .cards{ display:flex; flex-direction:column; gap:18px; margin-top:14px; align-items:center; }
+  .card-block{ border:1px solid #e2e2e2; border-radius:10px; padding:10px; width:min(100%, var(--table-max)); margin:0 auto; background:#fff; color:#111; }
+  .card-header{ display:block; text-align:center; }
+  .card-title{ font-weight:600; margin-bottom:8px; }
+  .card-actions{ display:flex; gap:8px; justify-content:center; margin:6px 0 10px; }
+  .saved-card td{ background:#fff; }
+  .saved-card td.hit{ background:#ffff00; font-weight:700; }
+
+  /* Bingo-Linien */
+  .strike-line{ position:absolute; height:4px; background:var(--strike-color); transform-origin:left center; pointer-events:none; z-index:5; }
+
+  /* Übersicht gezogene Zahlen */
+  .drawn-grid-wrap{ overflow-x:auto; padding:0; display:flex; justify-content:center; margin-top:0; border:none; border-radius:0; }
+  #drawnGridTable{ border-collapse:collapse; margin:0 auto; width:min(100%, var(--table-max)); max-width:var(--table-max); table-layout:fixed; border-radius:0; }
+  #drawnGridTable th, #drawnGridTable td{ border:2px solid #444; text-align:center; }
+  #drawnGridTable th{ background:#000; color:#fff; font-size:20px; height:44px; }
+  #drawnGridTable td{ height:44px; font-weight:700; }
+  #drawnGridTable .cell-inner{ min-height:36px; display:flex; align-items:center; justify-content:center; }
+
+  .number-badge{ display:inline-block; border-radius:4px; padding:2px 6px; margin:0; font-size:14px; cursor:pointer; user-select:none; border:1px solid transparent; font-weight:700; }
+  .badge-all{  background:rgba(76,175,80,0.15);  border-color:rgba(76,175,80,0.25); }
+  .badge-some{ background:rgba(255,152,0,0.15);  border-color:rgba(255,152,0,0.25); }
+  .badge-miss{ background:rgba(244,67,54,0.15);  border-color:rgba(244,67,54,0.25); } /* rot */
+  .badge-neutral{ background:#eee; border-color:#ddd; }
+
+  /* Legende */
+  .hint{ font-size:14px; }
+  .legend-list{ display:inline-grid; grid-template-columns:auto 1fr; gap:6px 10px; align-items:center; text-align:left; }
+  .legend-swatch{ width:18px; height:18px; border-radius:4px; border:1px solid transparent; display:inline-block; }
+  .legend-all{  background:rgba(76,175,80,0.15);  border-color:rgba(76,175,80,0.25); }
+  .legend-some{ background:rgba(255,152,0,0.15);  border-color:rgba(255,152,0,0.25); }
+  .legend-miss{ background:rgba(244,67,54,0.15); border-color:rgba(244,67,54,0.25); } /* Rot-Fix */
+
+  /* Schnellauswahl */
+  #quickGridTable th{ background:#9DCA43; color:#fff; }
+  #quickGridTable td{ height:44px; }
+  #quickGridBody td.q-chosen{ outline:3px solid var(--strike-color); outline-offset:-3px; }
+  #quickGridBody td.q-chosen .cell-inner{ opacity:1; font-weight:700; color:var(--strike-color); }
+  #quickGridBody td[data-qnum]{ cursor:pointer; }
+  #quickGridBody td.q-disabled{ pointer-events:none; }
+
+  /* Eingabefelder untereinander */
+  .inputs-column { display:flex; flex-direction:column; gap:8px; width:min(100%, var(--table-max)); margin:0 auto; padding:0 8px;}
+  .inputs-column input { width:100%; font-size:16px; padding:10px 12px; border-radius:10px; border:1px solid #ccc; box-sizing:border-box; color:#111; background:#fff; }
+
+  /* ===== Foto-Bereich (Crop & Handles) ===== */
+  #photoZone{ display:flex; flex-direction:column; align-items:center; gap:10px; }
+
+  .intro-box{
+    width: min(100%, 860px); /* schmaler als die Überschrift */
+    margin-left:auto; margin-right:auto;
+  }
+
+  #photoStage{
+    position:relative; max-width:100%; width:min(900px, 100%); aspect-ratio:4/3;
+    background:#fafafa; border:1px dashed #bbb; border-radius:8px; overflow:hidden;
+    cursor:default; touch-action:none; user-select:none; margin:0 auto;
+  }
+  #photoStage.space-pan{ cursor:grab; }
+  #photoStage.space-pan.active{ cursor:grabbing; }
+  #photoStage img{
+    position:absolute; inset:0; width:100%; height:100%; object-fit:contain; pointer-events:none;
+    transform-origin:center center; will-change:transform;
+  }
+  .crop-overlay{ position:absolute; inset:0; pointer-events:auto; }
+  .crop-rect{
+    position:absolute; border:3px solid var(--handle);
+    box-shadow:0 0 0 9999px rgba(0,0,0,.35);
+    pointer-events:auto; cursor:move; transform-origin:center center; touch-action:none; z-index:10;
+  }
+  .grid-line{ position:absolute; background:rgba(255,255,255,.75); }
+
+  .handle{
+    position:absolute; width:28px; height:28px; background:var(--handle);
+    border:2px solid #fff; border-radius:50%; box-shadow:0 1px 4px rgba(0,0,0,.4);
+    cursor:grab; touch-action:none; z-index:11;
+  }
+  .handle.tl{ left:0;   top:0;   transform:translate(-50%,-50%); }
+  .handle.tr{ left:100%; top:0;   transform:translate(50%,-50%); }
+  .handle.bl{ left:0;   top:100%; transform:translate(-50%,50%); }
+  .handle.br{ left:100%; top:100%; transform:translate(50%,50%); }
+  .handle.rot{
+    width:26px; height:26px; background:#fff; border:3px solid var(--handle);
+    border-radius:50%; position:absolute; left:50%; top:-28px; transform:translate(-50%,-50%); cursor:grab;
+  }
+  .angle-badge{
+    position:absolute; left:50%; top:-48px; transform:translate(-50%, -50%);
+    background:rgba(47,74,147,.95); color:#fff; font-size:12px; padding:3px 7px; border-radius:6px;
+    pointer-events:none; z-index:12;
+  }
+
+  .cell-box{ position:absolute; border:2px dashed rgba(255,255,255,.85); outline:1px solid rgba(0,0,0,.25); box-sizing:border-box; pointer-events:none; }
+
+  #ocrProgressWrap{ width:min(900px, 100%); margin:0 auto; }
+  #ocrProgressBar{ height:10px; background:#e0e0e0; border-radius:6px; overflow:hidden; }
+  #ocrProgressBar>div{ height:100%; width:0%; background:var(--accent); transition:width .2s ease; }
+  #ocrLegend{ font-size:13px; color:#666; text-align:center; }
+
+  @media (max-width:380px){
+    td { height:52px; }
+    input.cell-inp { font-size:15px; height:92%; }
+    input.cell-inp::placeholder { font-size:11px; }
+  }
+
+  /* Modal */
+  .modal-backdrop{ position:fixed; inset:0; background:rgba(0,0,0,.35); display:flex; align-items:center; justify-content:center; z-index:9999; }
+.modal-backdrop.d-none{ display:none !important; pointer-events:none !important; visibility:hidden !important; }
+  .modal-dialog{ width:min(92vw, 420px); }
+  .modal-content{ background:#fff; border-radius:12px; padding:18px; box-shadow:0 10px 30px rgba(0,0,0,.25); text-align:center; }
+  .modal-title{ margin:0 0 8px; font-size:18px; }
+  .modal-message{ font-size:16px; }
+
+  /* Zusätzliche Zentrierungssicherung */
+  #resultsInner, #cardsSavedBox, #drawProgressBox, #legendBox, #entryHint { margin-left:auto; margin-right:auto; }
+</style>
+</head>
+<body>
+
+<div class="container container-lines">
+  <!-- KURZE EINWEISUNG -->
+  <div class="bar" style="justify-content:center;">
+    <div class="box box-muted hint text-left intro-box">
+      <strong>Kurzanleitung</strong>
+      <ol style="margin:6px 0 0 18px; padding:0;">
+        <li><strong>Foto wählen:</strong> Gut ausgeleuchtetes, gerades Foto des Scheins auswählen.</li>
+<div class="spacer-small"></div>
+        <li><strong>Ausrichten:</strong> „Zahlentabelle ausrichten“ → Rahmen über die Zahlen legen, ggf. drehen → „Fertig ausgerichtet“.</li>
+<div class="spacer-small"></div>
+        <li><strong>Erkennen lassen:</strong> Die Zahlen werden automatisch in die Eingabetabelle übertragen (prüfe & ergänze alle Felder).</li>
+<div class="spacer-small"></div>
+        <li><strong>Schein speichern:</strong> Name/Seriennummer/Losnummer/Datum optional eintragen → „Schein speichern“.</li>
+<div class="spacer-small"></div>
+        <li><strong>Gezogene Zahlen eintragen:</strong> Über „Zahleneingabe“ (manuell + „Eingabe bestätigen“) oder „Zahlenschnellauswahl“.</li>
+<div class="spacer-small"></div>
+        <li><strong>Übersicht & Ergebnisse:</strong> Unten siehst du die gezogenen Zahlen als Tabelle, kannst Zahlen entfernen und Bingo-Ergebnisse ansehen.</li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- ======================= -->
+  <!-- A) FOTO-BEREICH (BETA) -->
+  <!-- ======================= -->
+  <h2 id="betaTop" class="section-title">Schein mit Foto anlegen (Beta)</h2>
+<div class="spacer-small"></div>
+  <div id="photoZone" class="bar" style="flex-direction:column">
+    <div class="bar"><input id="uploadInput" type="file" accept="image/*"></div>
+
+    <div id="photoBtnBar" class="bar d-none" style="margin-top:8px;">
+      <button id="alignBtn" class="d-none" type="button">📏 Zahlentabelle ausrichten</button>
+      <button id="finishAlignBtn" class="d-none" type="button">✅ Fertig ausgerichtet</button>
+      <button id="deletePhotoBtn" class="d-none" type="button">🧹 Foto entfernen</button>
+    </div>
+
+    <div id="photoSpacerAfterButtons" class="spacer d-none"></div>
+
+    <p id="photoHint" class="muted text-center">
+      Bitte ein gerades Foto des Bingoscheins auswählen, um die Zahlen automatisch zu erkennen.
+    </p>
+
+    <div id="photoStage" class="d-none" title="Pinch: Zoom • 1-Finger: Bild/Frame ziehen • Kreis oben: drehen">
+      <img id="photoImage" alt="Bingoschein" />
+      <div class="crop-overlay d-none" id="cropOverlay">
+        <div id="cropRect" class="crop-rect" style="left:10%; top:10%; width:80%; height:80%;">
+          <div class="grid-line" data-grid="v1"></div>
+          <div class="grid-line" data-grid="v2"></div>
+          <div class="grid-line" data-grid="v3"></div>
+          <div class="grid-line" data-grid="v4"></div>
+          <div class="grid-line" data-grid="h1"></div>
+          <div class="grid-line" data-grid="h2"></div>
+          <div class="grid-line" data-grid="h3"></div>
+          <div class="grid-line" data-grid="h4"></div>
+          <div id="cellBoxes"></div>
+          <div class="handle tl" data-h="tl"></div>
+          <div class="handle tr" data-h="tr"></div>
+          <div class="handle bl" data-h="bl"></div>
+          <div class="handle br" data-h="br"></div>
+          <div class="handle rot" data-h="rot" title="Drehen"></div>
+          <div class="angle-badge" id="angleBadge">0°</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mobile-rotate d-none" id="mobileRotate">
+      <button id="rotMinus" type="button">↶ −1°</button>
+      <button id="rotPlus" type="button">↷ +1°</button>
+      <button id="rotReset" type="button">⟲ 0°</button>
+    </div>
+
+    <div id="ocrLegend" class="box box-muted hint text-center">
+      ℹ️ <strong>Tipp:</strong> Richte den Rahmen nur über den Zahlenfeldern aus. Linien möglichst parallel ausrichten.
+    </div>
+
+    <div id="ocrProgressWrap" class="d-none">
+      <div id="ocrProgressBar"><div></div></div>
+      <div id="ocrStatus" class="muted" style="text-align:center; margin-top:6px;">Bereit…</div>
+    </div>
+  </div>
+
+  <!-- ======================= -->
+  <!-- B) MANUELLER BEREICH -->
+  <!-- ======================= -->
+  <div class="spacer-large"></div>
+  <h2 id="top" class="section-title">Schein anlegen</h2>
+  <div class="spacer-large"></div>
+
+  <div class="table-wrap">
+    <table id="inputTable" aria-label="Eingabetabelle">
+      <thead>
+        <tr><th>B</th><th>I</th><th>N</th><th>G</th><th>O</th></tr>
+      </thead>
+      <tbody id="inputBody">
+        <script>
+          const COL_RANGES_INPUT = [[1,15],[16,30],[31,45],[46,60],[61,75]];
+          document.write(
+            Array(5).fill('').map(() =>
+              '<tr>' + COL_RANGES_INPUT.map(([min,max]) =>
+                `<td><input class="cell-inp" type="number" min="${min}" max="${max}" step="1" placeholder="${min}-${max}"></td>`
+              ).join('') + '</tr>'
+            ).join('')
+          );
+        </script>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="inputs-column">
+    <div class="spacer-small" aria-hidden="true"></div>
+    <input id="cardName"  type="text" placeholder="Scheinname" />
+    <input id="serialNo"  type="text" placeholder="Seriennummer" />
+    <input id="ticketNo"  type="text" placeholder="Losnummer" />
+    <!-- Datum mit Platzhalter-Restore -->
+    <input id="drawDate"  type="text" placeholder="Datum"
+           onfocus="this.type='date'"
+           onblur="if(!this.value) this.type='text'" />
+  </div>
+
+  <div class="bar">
+    <button id="saveBtn" type="button">💾 Schein speichern</button>
+    <button id="saveCancelBtn" class="d-none" type="button">✖️ Abbrechen</button>
+    <button id="clearBtn" type="button">♻️ Bereich zurücksetzen</button>
+  </div>
+  <div id="formError" class="muted" style="min-height:1em;"></div>
+
+  <!-- Sprung-Button zur Zahleneingabe -->
+  <div class="bar">
+    <button id="goToCheckBtn" type="button">⬇️ Gezogene Zahlen eintragen / auswählen</button>
+  </div>
+
+  <!-- ======================= -->
+  <!-- D) LISTE – direkt nach „Schein anlegen“ -->
+  <!-- ======================= -->
+  <div class="spacer-large"></div>
+  <h2 class="section-title">Gespeicherte Scheine</h2>
+  <div class="spacer-small"></div>
+
+  <div id="cardsSavedBox" class="box box-muted text-center" style="margin-bottom:12px;">
+    Es wurden 0 von 50 Scheinen gespeichert
+  </div>
+
+  <div class="bar" id="deleteAllBar">
+    <button id="deleteAllBtn" type="button">🗑️ Alle Scheine löschen</button>
+  </div>
+  <div id="afterDeleteSpacer" class="spacer"></div>
+
+  <div class="cards" id="cards"></div>
+
+  <!-- ======================= -->
+  <!-- C) GEZOGENE ZAHLEN -->
+  <!-- ======================= -->
+  <div class="spacer-large"></div>
+  <h2 id="checkTop" class="section-title">Gezogene Zahlen eintragen / auswählen</h2>
+  <div class="spacer"></div>
+
+  <div class="bar" id="drawButtonsBar">
+    <button id="toggleEntryBtn" type="button">✏️ Zahleneingabe</button>
+    <button id="toggleQuickBtn" type="button">⚡ Zahlenschnellauswahl</button>
+  </div>
+
+  <!-- Spacer Large bei „Schließen“-Zuständen -->
+  <div id="entryCloseSpacer" class="spacer-large d-none"></div>
+  <div id="quickCloseSpacer" class="spacer-large d-none"></div>
+
+  <!-- Panel: Zahleneingabe -->
+  <div id="entryPanel" class="d-none">
+    <div class="bar">
+      <label for="drawn">Gezogene Zahl(en):</label>
+      <input id="drawn" type="text" placeholder="z.B. 16,22,37" />
+    </div>
+    <div class="bar">
+      <button id="markBtn" type="button">✅ Eingabe bestätigen</button>
+    </div>
+  </div>
+
+  <!-- Panel: Schnellauswahl -->
+  <div id="quickPanel" class="d-none">
+    <div class="table-wrap">
+      <table id="quickGridTable" aria-label="Zahlenschnellauswahl">
+        <thead>
+          <tr><th>B</th><th>I</th><th>N</th><th>G</th><th>O</th></tr>
+        </thead>
+        <tbody id="quickGridBody">
+          <tr><td colspan="5"><div class="cell-inner muted">Lade Schnellauswahl…</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Spacer + Hinweis (sichtbar, wenn ≥1 Zahl existiert) -->
+  <div id="spacerBeforeEntryHint" class="spacer-large d-none"></div>
+  <div id="entryHint" class="box box-muted hint d-none">
+    ℹ️ <strong>Tipp:</strong> Zum Entfernen einer gezogenen Zahl nutze die Übersicht unten.
+  </div>
+
+  <div class="spacer-large"></div>
+
+  <!-- ======================= -->
+  <!-- C2) ÜBERSICHT DER GEZOGENEN ZAHLEN -->
+  <!-- ======================= -->
+  <h2 class="section-title">Übersicht - Gezogene Zahlen</h2>
+  <div class="spacer-small"></div>
+
+  <div id="drawProgressBox" class="box box-muted text-center" style="margin-bottom:12px;">
+    Es wurden noch keine Zahlen gezogen
+  </div>
+
+  <div class="spacer-small"></div>
+
+  <div class="drawn-grid-wrap d-none" id="drawnGridWrap">
+    <table id="drawnGridTable" aria-label="Gezogene Zahlen als Bingo-Tabelle">
+      <thead>
+        <tr><th>B</th><th>I</th><th>N</th><th>G</th><th>O</th></tr>
+      </thead>
+      <tbody id="drawnGridBody">
+        <tr><td colspan="5"><div class="cell-inner muted">Noch keine Zahlen vorhanden</div></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="spacer"></div>
+
+  <div id="drawnHint" class="box box-muted hint d-none text-left">
+    ℹ️&nbsp; <strong>Vertippt?</strong> Klicke auf eine gezogene Zahl, um sie wieder zu entfernen.
+  </div>
+
+  <!-- Reihenfolge: Trefferampel über Reset -->
+  <div id="spacerAfterHint1" class="spacer d-none"></div>
+
+  <!-- Trefferampel -->
+  <div class="bar d-none" id="highlightBar">
+    <button id="highlightToggleBtn" type="button">🎯 Trefferampel aktivieren</button>
+  </div>
+
+  <!-- Legende -->
+  <div id="legendBox" class="box box-muted hint d-none text-left" style="margin-top:10px;">
+    <div class="legend-list">
+      <span class="legend-swatch legend-all" aria-hidden="true"></span>
+      <span>= Zahl ist auf <strong>allen</strong> gespeicherten Scheinen vorhanden</span>
+
+      <span class="legend-swatch legend-some" aria-hidden="true"></span>
+      <span>= Zahl ist auf <strong>mindestens einem</strong> gespeicherten Schein vorhanden</span>
+
+      <span class="legend-swatch legend-miss" aria-hidden="true"></span>
+      <span>= Zahl ist auf <strong>keinem</strong> gespeicherten Schein vorhanden</span>
+    </div>
+  </div>
+
+  <!-- Kleiner Spacer, dann Reset -->
+  <div id="spacerAfterReset1" class="spacer d-none"></div>
+  <div class="bar d-none" id="resetBar">
+    <button id="resetMarksBtn" type="button">🔄 Alle Zahlen zurücksetzen</button>
+  </div>
+
+  <!-- ======================= -->
+  <!-- E) BINGO-ERGEBNISSE -->
+  <!-- ======================= -->
+  <div class="spacer-large"></div>
+  <h2 class="section-title">Bingo-Ergebnisse</h2>
+  <div class="spacer-small"></div>
+
+  <div id="resultsWrap" class="bar" style="justify-content:center;">
+    <div id="resultsInner" style="width:min(100%, var(--table-max)); text-align:center; margin-left:auto; margin-right:auto;">
+      <div id="progressBox" class="box box-muted text-center" style="margin-bottom:12px;">
+        Es wurden noch keine Zahlen gezogen
+      </div>
+<div class="spacer-small"></div>
+      <div id="statusBox" class="box box-muted text-center d-none" aria-live="polite">
+        <h3 id="statusTitle" style="margin:0;"></h3>
+        <div id="statusSubtitle" class="muted" style="margin-top:6px;"></div>
+        <div id="statusCounts" class="muted d-none" style="margin-top:8px; font-weight:700;"></div>
+      </div>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <div class="bar">
+    <button id="backToCheckBtn" type="button">⬆️ Gezogene Zahlen eintragen / auswählen</button>
+  </div>
+
+  <div class="spacer-large"></div><div class="spacer-large"></div>
+</div> <!-- /.container -->
+
+<!-- Modal (OK) -->
+<div id="appModal" class="modal-backdrop d-none" aria-hidden="true">
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="appModalTitle">
+    <div class="modal-content">
+      <h3 id="appModalTitle" class="modal-title">Hinweis</h3>
+      <div id="appModalMsg" class="modal-message"></div>
+      <div class="bar" style="margin-top:14px;">
+        <button id="appModalOk" type="button" autofocus>OK</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal (Bestätigen) -->
+<div id="confirmModal" class="modal-backdrop d-none" aria-hidden="true">
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
+    <div class="modal-content">
+      <h3 id="confirmModalTitle" class="modal-title">Bestätigen</h3>
+      <div id="confirmModalMsg" class="modal-message"></div>
+      <div class="bar" style="margin-top:14px;">
+        <button id="confirmCancel" type="button">Abbrechen</button>
+        <button id="confirmOk" type="button" autofocus>OK</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const STORAGE_KEY='gb-bingo-v90';
+  const MAX_CARDS=50;
+  const COL_RANGES=[[1,15],[16,30],[31,45],[46,60],[61,75]];
+  const MAX_DRAWN = 22;
+
+  function $(id){ return document.getElementById(id); }
+  function show(el){ if(el) el.classList.remove('d-none'); }
+  function hide(el){ if(el) el.classList.add('d-none'); }
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+  function isSmall(){ return window.matchMedia('(max-width: 600px)').matches; }
+
+  /* DOM-Referenzen */
+  const cardName = $('cardName');
+  const serialNo = $('serialNo');
+  const ticketNo = $('ticketNo');
+  const drawDate = $('drawDate');
+  const inputBody = $('inputBody');
+  const saveBtn = $('saveBtn');
+  const saveCancelBtn = $('saveCancelBtn');
+  const clearBtn = $('clearBtn');
+
+  const goToCheckBtn = $('goToCheckBtn');
+
+  const cardsWrap = $('cards');
+
+  const toggleEntryBtn = $('toggleEntryBtn');
+  const toggleQuickBtn = $('toggleQuickBtn');
+  const entryPanel = $('entryPanel');
+  const quickPanel = $('quickPanel');
+  const quickGridBody = $('quickGridBody');
+
+  const drawn   = $('drawn');
+  const markBtn = $('markBtn');
+  const resetBtn= $('resetMarksBtn');
+
+  const formError = $('formError');
+
+  const drawnGridWrap = $('drawnGridWrap');
+  const drawnGridBody = $('drawnGridBody');
+
+  const resultsWrap    = $('resultsWrap');
+  const backToCheckBtn = $('backToCheckBtn');
+
+  const statusBox      = $('statusBox');
+  const statusTitle    = $('statusTitle');
+  const statusSubtitle = $('statusSubtitle');
+  const statusCounts   = $('statusCounts');
+
+  const progressBox    = $('progressBox');
+  const drawProgressBox = $('drawnGridBox') || $('drawProgressBox');
+
+  const drawnHint = $('drawnHint');
+  const legendBox = $('legendBox');
+  const highlightToggleBtn = $('highlightToggleBtn');
+
+  const spacerAfterHint1 = $('spacerAfterHint1');
+  const spacerAfterReset1 = $('spacerAfterReset1');
+  const resetBar = $('resetBar');
+  const highlightBar = $('highlightBar');
+
+  const cardsSavedBox = $('cardsSavedBox');
+  const deleteAllBar = $('deleteAllBar');
+  const afterDeleteSpacer = $('afterDeleteSpacer');
+  const deleteAllBtn = $('deleteAllBtn');
+
+  const entryHint = $('entryHint');
+  const spacerBeforeEntryHint = $('spacerBeforeEntryHint');
+  const entryCloseSpacer = $('entryCloseSpacer');
+  const quickCloseSpacer = $('quickCloseSpacer');
+
+  /* Foto */
+  const uploadInput = $('uploadInput');
+  const alignBtn = $('alignBtn');
+  const finishAlignBtn = $('finishAlignBtn');
+  const deletePhotoBtn = $('deletePhotoBtn');
+  const photoStage = $('photoStage');
+  const photoImage = $('photoImage');
+  const cropOverlay = $('cropOverlay');
+  const cropRect = $('cropRect');
+  const angleBadge = $('angleBadge');
+  const ocrProgressWrap = $('ocrProgressWrap');
+  const ocrProgressBarInner = $('ocrProgressBar')?.firstElementChild;
+  const ocrStatus = $('ocrStatus');
+  const photoBtnBar = $('photoBtnBar');
+  const photoSpacerAfterButtons = $('photoSpacerAfterButtons');
+  const photoHint = $('photoHint');
+  const mobileRotate = $('mobileRotate');
+
+  /* Scroll Lock (für Modals) */
+  let __lockScrollY = 0;
+  function lockScroll(){
+    __lockScrollY = window.scrollY || window.pageYOffset || 0;
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${__lockScrollY}px`;
+    document.body.style.left = '0';
+    document.body.style.right = '0';
+    document.body.style.width = '100%';
+  }
+  function unlockScroll(){
+    document.body.style.position = '';
+    document.body.style.top = '';
+    document.body.style.left = '';
+    document.body.style.right = '';
+    document.body.style.width = '';
+    window.scrollTo(0, __lockScrollY);
+  }
+
+  /* ===== Fokus-Helfer (A11y) ===== */
+  function moveFocusTo(el){
+    if(!el) return;
+    const hadTabindex = el.hasAttribute('tabindex');
+    if(!hadTabindex) el.setAttribute('tabindex','-1');
+    try { el.focus({ preventScroll:true }); } catch {}
+    if(!hadTabindex){
+      el.addEventListener('blur', ()=> el.removeAttribute('tabindex'), { once:true });
+    }
+  }
+  function focusFallback(){
+    return document.querySelector('#checkTop') || document.querySelector('#top') || document.body;
+  }
+
+  /* ====== Deferred Scroll zu Ergebnissen ====== */
+  let modalOpen = false;
+  let pendingResultsScroll = false;
+
+  function scrollResultsNow(){
+    try {
+      resultsWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch {}
+  }
+  function scheduleResultsScroll(){
+    pendingResultsScroll = true;
+    setTimeout(()=>{
+      if(!modalOpen && pendingResultsScroll){
+        scrollResultsNow();
+        pendingResultsScroll = false;
+      }
+    }, 0);
+  }
+  function onModalClosed(){
+    modalOpen = false;
+    if(pendingResultsScroll){
+      scrollResultsNow();
+      pendingResultsScroll = false;
+    }
+  }
+
+  function showModal(message){
+    return new Promise((resolve)=>{
+      const modal=$('appModal'), msgEl=$('appModalMsg'), okBtn=$('appModalOk');
+      const container = document.querySelector('.container');
+      const lastFocus = document.activeElement;
+
+      msgEl.textContent=message||'';
+      modal.classList.remove('d-none');
+      modal.setAttribute('aria-hidden','false');
+      modalOpen = true;
+      lockScroll();
+      // Kein 'inert' – iOS/Safari Kompatibilität
+      function close(){
+        // Fokus aus dem Modal holen, bevor aria-hidden gesetzt wird
+        if (modal.contains(document.activeElement)) {
+          if (lastFocus && document.contains(lastFocus)) moveFocusTo(lastFocus);
+          else moveFocusTo(focusFallback());
+        }
+        //
+// entfernt
+        modal.classList.add('d-none');
+        modal.setAttribute('aria-hidden','true');
+
+        okBtn.removeEventListener('click', onOk);
+        document.removeEventListener('keydown', onKey);
+        unlockScroll();
+        onModalClosed();
+        resolve();
+      }
+      function onOk(){ close(); }
+      function onKey(e){ if(e.key==='Enter' || e.key===' ' || e.key==='Escape'){ e.preventDefault(); close(); } }
+      okBtn.addEventListener('click', onOk, {once:true});
+      document.addEventListener('keydown', onKey, {once:true});
+      setTimeout(()=>{ try{ okBtn.focus(); }catch{} },0);
+    });
+  }
+
+  function showConfirm(message,opts){
+    opts = opts || {};
+    const okText = opts.okText || 'OK';
+    const cancelText = opts.cancelText || 'Abbrechen';
+    return new Promise((resolve)=>{
+      const modal=$('confirmModal'), msgEl=$('confirmModalMsg'), okBtn=$('confirmOk'), cancelBtn=$('confirmCancel');
+      const container = document.querySelector('.container');
+      const lastFocus = document.activeElement;
+
+      msgEl.textContent=message||''; okBtn.textContent=okText; cancelBtn.textContent=cancelText;
+
+      modal.classList.remove('d-none');
+      modal.setAttribute('aria-hidden','false');
+      modalOpen = true;
+      lockScroll();
+      // Kein 'inert'
+
+      function cleanup(){
+        // Fokus aus dem Modal holen, bevor aria-hidden gesetzt wird
+        if (modal.contains(document.activeElement)) {
+          if (lastFocus && document.contains(lastFocus)) moveFocusTo(lastFocus);
+          else moveFocusTo(focusFallback());
+        }
+
+        okBtn.removeEventListener('click', onOk);
+        cancelBtn.removeEventListener('click', onCancel);
+        document.removeEventListener('keydown', onKey);
+
+        modal.classList.add('d-none');
+        modal.setAttribute('aria-hidden','true');
+
+        unlockScroll();
+        onModalClosed();
+      }
+      function onOk(){ cleanup(); resolve(true); }
+      function onCancel(){ cleanup(); resolve(false); }
+      function onKey(e){ if(e.key==='Escape'){ e.preventDefault(); onCancel(); } if(e.key==='Enter'){ e.preventDefault(); onOk(); } }
+      okBtn.addEventListener('click', onOk);
+      cancelBtn.addEventListener('click', onCancel);
+      document.addEventListener('keydown', onKey);
+      setTimeout(()=>{ try{ okBtn.focus(); }catch{} },0);
+    });
+  }
+
+  /* Init */
+  try{
+    if(!document.querySelector('#inputBody tr')){
+      for(let r=0;r<5;r++){
+        const tr=document.createElement('tr');
+        for(let c=0;c<5;c++){
+          const [min,max]=COL_RANGES[c];
+          tr.innerHTML += `<td><input class="cell-inp" type="number" min="${min}" max="${max}" step="1" placeholder="${min}-${max}"></td>`;
+        }
+        inputBody.appendChild(tr);
+      }
+    }
+
+    /* Events */
+    saveBtn.addEventListener('click', ()=>{ saveCard(); });
+    saveCancelBtn.addEventListener('click', ()=>{ exitEditMode(); clearInput(); });
+    clearBtn.addEventListener('click', async ()=>{ const ok=await showConfirm('Alle Eingaben in diesem Bereich wirklich löschen?', {okText:'Ja, löschen'}); if(ok) clearInput(); });
+
+    markBtn.addEventListener('click', (e)=>{ e.preventDefault(); markNumber(); });
+    inputBody.addEventListener('input', liveValidate);
+
+    /* Start */
+    liveValidate();
+    renderAllCards();
+    updateAll();
+
+    entryPanel.classList.add('d-none');
+    quickPanel.classList.add('d-none');
+    toggleEntryBtn.classList.remove('d-none');
+    toggleQuickBtn.classList.remove('d-none');
+    hide(entryCloseSpacer);
+    hide(quickCloseSpacer);
+
+  }catch(err){
+    console.error('Init-Fehler:', err);
+    showModal('Es ist ein Fehler beim Initialisieren aufgetreten. Details in der Konsole.');
+  }
+})();
+</script>
+
+
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js').catch(()=>{});
+  });
+}
+</script>
+</body>
+</html>
